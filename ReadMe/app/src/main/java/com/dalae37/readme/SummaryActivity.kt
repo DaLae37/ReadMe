@@ -8,7 +8,7 @@ import android.view.MotionEvent
 
 class SummaryActivity : AppCompatActivity() {
 
-    private var mediaPlayer : MediaPlayer = MediaPlayer()
+    private lateinit var mediaPlayer : MediaPlayer
     private var curX : Float = 0f
 
     override fun onCreate(savedInstanceState: Bundle?) {
