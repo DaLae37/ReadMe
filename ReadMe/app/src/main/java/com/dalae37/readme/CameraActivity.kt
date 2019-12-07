@@ -20,11 +20,8 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.os.*
 import android.provider.MediaStore
+import android.util.*
 import androidx.appcompat.app.AppCompatActivity
-import android.util.DisplayMetrics
-import android.util.Size
-import android.util.SparseArray
-import android.util.SparseIntArray
 import android.view.*
 import android.widget.FrameLayout
 import android.widget.Toast
@@ -32,11 +29,16 @@ import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import kotlinx.android.synthetic.main.activity_camera.*
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.io.OutputStream
+import java.io.OutputStreamWriter
 import java.lang.Exception
+import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
 import java.util.*
+import kotlin.math.log
 
 class CameraActivity : AppCompatActivity() {
     companion object{
@@ -51,7 +53,7 @@ class CameraActivity : AppCompatActivity() {
         private fun applicationContext() : Context {
             return instance!!.applicationContext
         }
-        private fun insertImage(cr : ContentResolver, source : Bitmap?, title : String, description : String) : String{
+        private fun insertImage(cr : ContentResolver, source : Bitmap, title : String, description : String) : String{
             val values = ContentValues()
             values.put(MediaStore.Images.Media.TITLE, title)
             values.put(MediaStore.Images.Media.DISPLAY_NAME, title)
@@ -102,12 +104,7 @@ class CameraActivity : AppCompatActivity() {
     private val deviceStateCallback : CameraDevice.StateCallback = object : CameraDevice.StateCallback(){
         override fun onOpened(p0: CameraDevice) {
             mCameraDevice = p0
-            try{
-                takePreview()
-            }
-            catch (e : CameraAccessException){
-                e.printStackTrace()
-            }
+            takePreview()
         }
 
         override fun onDisconnected(p0: CameraDevice) {
@@ -124,6 +121,7 @@ class CameraActivity : AppCompatActivity() {
             try{
                 mPreviewBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                 mPreviewBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                mSession.setRepeatingRequest(mPreviewBuilder.build(), null, mHandler)
             }
             catch (e : CameraAccessException){
                 e.printStackTrace()
@@ -160,14 +158,16 @@ class CameraActivity : AppCompatActivity() {
         }
     }
 
-    private val mOnImageAvailableListener : ImageReader.OnImageAvailableListener = ImageReader.OnImageAvailableListener { reader->{
-        var image : Image = reader.acquireNextImage()
-        var buffer : ByteBuffer = image.planes[0].buffer
-        var bytes : ByteArray = ByteArray(buffer.remaining())
-        buffer.get(bytes)
-        val bitmap : Bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        SaveImageTask().execute(bitmap)
-    } }
+    private val mOnImageAvailableListener : ImageReader.OnImageAvailableListener = object : ImageReader.OnImageAvailableListener{
+        override fun onImageAvailable(reader : ImageReader?){
+            var image : Image = reader!!.acquireNextImage()
+            var buffer : ByteBuffer = image.planes[0].buffer
+            var bytes = ByteArray(buffer.remaining())
+            buffer.get(bytes)
+            var bitmap : Bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            SaveImageTask().execute(bitmap)
+        }
+    }
 
 
     private lateinit var mediaPlayer : MediaPlayer
@@ -186,6 +186,8 @@ class CameraActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        instance = this
+
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         window.setFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON, WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
@@ -199,14 +201,14 @@ class CameraActivity : AppCompatActivity() {
         mediaPlayer = MediaPlayer.create(this,R.raw.camera_open)
         mediaPlayer.start()
 
-        take_photo.setOnClickListener(View.OnClickListener {v->takePicture() })
+        //take_photo.setOnClickListener(View.OnClickListener {v->setConnection() })
 
         mSensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         mAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         mMagnetometer = mSensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
         deviceOrientation = DeviceOrientation()
 
-        initSurfaveView()
+        initSurfaceView()
     }
 
     override fun onResume() {
@@ -244,7 +246,38 @@ class CameraActivity : AppCompatActivity() {
         return true
     }
 
-    private fun initSurfaveView() {
+    private fun setConnection(){
+        val url = URL("http://35.221.78.179:5000/calc")
+
+        Thread{
+            with(url.openConnection() as HttpURLConnection) {
+                requestMethod = "POST"
+
+                var wr = OutputStreamWriter(outputStream)
+                wr.write("a : 90")
+                wr.flush()
+
+                when (responseCode) {
+                    200 -> {
+                        BufferedReader(InputStreamReader(inputStream)).use {
+                            val response = StringBuffer()
+                            var inputLine = it.readLine()
+                            while (inputLine != null) {
+                                response.append(inputLine)
+                                inputLine = it.readLine()
+                            }
+                            it.close()
+                            Log.i("결과", response.toString())
+                        }
+                    }
+                    else -> {
+                        Log.e("결과", "연결 실패!")
+                    }
+                }
+            }
+        }.start()
+    }
+    private fun initSurfaceView() {
         var displayMetrics = DisplayMetrics()
         windowManager.defaultDisplay.getMetrics(displayMetrics)
         mDSI_height = displayMetrics.heightPixels
@@ -252,13 +285,14 @@ class CameraActivity : AppCompatActivity() {
 
         mSurfaceHolder = surfaceView.holder
         mSurfaceHolder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceChanged(p0: SurfaceHolder?, p1: Int, p2: Int, p3: Int) {
+            override fun surfaceCreated(p0: SurfaceHolder?) {
                 initCameraAndPreview()
             }
             override fun surfaceDestroyed(p0: SurfaceHolder?) {
                 mCameraDevice.close()
             }
-            override fun surfaceCreated(p0: SurfaceHolder?) {
+            override fun surfaceChanged(p0: SurfaceHolder?, p1: Int, p2: Int, p3: Int) {
+
             }
         })
     }
@@ -275,10 +309,11 @@ class CameraActivity : AppCompatActivity() {
             var characteristics : CameraCharacteristics = mCameraManager.getCameraCharacteristics(mCameraId)
             var map : StreamConfigurationMap? = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             var largestPreviewSize : Size = map!!.getOutputSizes(ImageFormat.JPEG)[0]
+
             setAspectRationTextureView(largestPreviewSize.height, largestPreviewSize.width)
             mImageReader = ImageReader.newInstance(largestPreviewSize.width, largestPreviewSize.height, ImageFormat.JPEG,7)
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mainHandler)
-            if(ActivityCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED){
+            if(ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED){
                 return
             }
             mCameraManager.openCamera(mCameraId, deviceStateCallback, mHandler)
@@ -299,7 +334,7 @@ class CameraActivity : AppCompatActivity() {
         updateTextureViewSize(newWidth, newHeight)
     }
 
-    private fun takePreview(){
+    private fun takePreview() {
         mPreviewBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
         mPreviewBuilder.addTarget(mSurfaceHolder.surface)
         mCameraDevice.createCaptureSession(Arrays.asList(mSurfaceHolder.surface,mImageReader.surface),mSessionPreviewStateCallback, mHandler)
@@ -310,6 +345,8 @@ class CameraActivity : AppCompatActivity() {
             captureRequestBuilder.addTarget(mImageReader.surface)
             captureRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             captureRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+
+            mDeviceRotation = ORIENTATIONS.get(deviceOrientation.getOrientation())
 
             captureRequestBuilder.set(CaptureRequest.JPEG_ORIENTATION, mDeviceRotation)
             var mCaptureRequest = captureRequestBuilder.build()
@@ -351,7 +388,7 @@ class CameraActivity : AppCompatActivity() {
                 e.printStackTrace()
             }
 
-            insertImage(getContentResolver(), bitmap, System.currentTimeMillis().toString(),"")
+            insertImage(getContentResolver(), bitmap!!, System.currentTimeMillis().toString(),"")
 
             return null
         }
