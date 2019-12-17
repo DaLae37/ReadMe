@@ -2,7 +2,6 @@ package com.dalae37.readme
 
 import android.Manifest
 import android.annotation.TargetApi
-import android.bluetooth.BluetoothHidDevice
 import android.content.*
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -18,27 +17,30 @@ import android.media.Image
 import android.media.ImageReader
 import android.media.MediaPlayer
 import android.net.Uri
-import android.os.*
+import android.os.AsyncTask
+import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
 import android.provider.MediaStore
-import android.util.*
-import androidx.appcompat.app.AppCompatActivity
-import android.view.*
+import android.util.DisplayMetrics
+import android.util.Log
+import android.util.Size
+import android.util.SparseIntArray
+import android.view.MotionEvent
+import android.view.SurfaceHolder
+import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import kotlinx.android.synthetic.main.activity_camera.*
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.OutputStream
-import java.io.OutputStreamWriter
-import java.lang.Exception
+import org.json.JSONObject
+import java.io.*
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
+import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.math.log
 
 class CameraActivity : AppCompatActivity() {
     companion object{
@@ -47,6 +49,8 @@ class CameraActivity : AppCompatActivity() {
         private var mDSI_width : Int = 0
         private var instance : CameraActivity? =null
         private val ORIENTATIONS : SparseIntArray = SparseIntArray()
+        private lateinit var bitmapByteData : ByteArray
+        private var isCaptureSuccess : Boolean = false
         private fun getContentResolver() : ContentResolver {
             return applicationContext().contentResolver!!
         }
@@ -70,7 +74,11 @@ class CameraActivity : AppCompatActivity() {
                 if(source != null){
                     var imageOut : OutputStream? = cr.openOutputStream(uri as Uri)
                     try{
-                        source.compress(Bitmap.CompressFormat.JPEG, 50, imageOut)
+                        val stream = ByteArrayOutputStream()
+                        source.compress(Bitmap.CompressFormat.JPEG, 100, imageOut)
+                        source.compress(Bitmap.CompressFormat.JPEG, 100, stream)
+                        bitmapByteData = stream.toByteArray()
+                        isCaptureSuccess = true
                     }finally {
                         imageOut!!.close()
                     }
@@ -182,6 +190,8 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var mSensorManager: SensorManager
     private lateinit var deviceOrientation: DeviceOrientation
     private var curY : Float = 0f
+    private var pressTime : Long = 0
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -200,8 +210,6 @@ class CameraActivity : AppCompatActivity() {
         ORIENTATIONS.append(ExifInterface.ORIENTATION_ROTATE_270, 270);
         mediaPlayer = MediaPlayer.create(this,R.raw.camera_open)
         mediaPlayer.start()
-
-        //take_photo.setOnClickListener(View.OnClickListener {v->setConnection() })
 
         mSensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         mAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
@@ -233,6 +241,7 @@ class CameraActivity : AppCompatActivity() {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 curY = event.y
+                pressTime = System.currentTimeMillis()
             }
             MotionEvent.ACTION_UP -> {
                 var diffY: Float = curY - event.y
@@ -241,40 +250,80 @@ class CameraActivity : AppCompatActivity() {
                     startActivity(intent)
                     finish()
                 }
+                else if(System.currentTimeMillis() - pressTime > 1){
+                    setConnection()
+                }
             }
         }
         return true
     }
 
     private fun setConnection(){
-        val url = URL("http://35.221.78.179:5000/calc")
-
+        val url = URL("http://35.221.78.179:5000/base64img")
+        takePicture()
         Thread{
-            with(url.openConnection() as HttpURLConnection) {
-                requestMethod = "POST"
+            do {
+                if(isCaptureSuccess) {
+                    with(url.openConnection() as HttpURLConnection) {
+                        requestMethod = "POST"
+                        connectTimeout = 3000
+                        readTimeout = 3000
+                        doInput = true
+                        useCaches = false
 
-                var wr = OutputStreamWriter(outputStream)
-                wr.write("a : 90")
-                wr.flush()
+                        val json = JSONObject()
+                        var wr = OutputStreamWriter(outputStream)
+                        val mDate = Date(System.currentTimeMillis())
+                        val simpleDate = SimpleDateFormat("yyyyMMddHHmm")
+                        var currentDate = simpleDate.format(mDate).toString()
+                        val gender = "M"
+                        json.put("image",Base64.getEncoder().encodeToString(bitmapByteData))
+                        json.put("date",currentDate)
+                        json.put("gender",gender)
 
-                when (responseCode) {
-                    200 -> {
-                        BufferedReader(InputStreamReader(inputStream)).use {
-                            val response = StringBuffer()
-                            var inputLine = it.readLine()
-                            while (inputLine != null) {
-                                response.append(inputLine)
-                                inputLine = it.readLine()
+                        setRequestProperty("charset", "utf-8")
+                        setRequestProperty("Content-lenght", json.length().toString())
+                        setRequestProperty("Content-Type", "application/json")
+
+                        wr.write(json.toString())
+                        wr.flush()
+
+                        Log.i("보낼거", json.toString())
+                        Log.i("결과", responseCode.toString())
+                        Log.i("결과 응답", responseMessage)
+                        when (responseCode) {
+                            200 -> {
+                                var result : String? = ""
+                                BufferedReader(InputStreamReader(inputStream)).use {
+                                    val response = StringBuffer()
+                                    var inputLine = it.readLine()
+                                    while (inputLine != null) {
+                                        response.append(inputLine)
+                                        inputLine = it.readLine()
+                                    }
+                                    it.close()
+                                    result = response.toString()
+                                }
+                                if(!result.equals("")) {
+                                    val pref = applicationContext.getSharedPreferences(
+                                        "prefs",
+                                        Context.MODE_PRIVATE
+                                    )
+                                    val prefEdit: SharedPreferences.Editor = pref.edit()
+                                    prefEdit.putString("returnData", result)
+                                    prefEdit.putBoolean("isRenewal", true)
+                                    prefEdit.apply()
+                                }
+                                val intent : Intent = Intent(applicationContext, ResultActivity::class.java)
+                                startActivity(intent)
+                                finish()
                             }
-                            it.close()
-                            Log.i("결과", response.toString())
                         }
                     }
-                    else -> {
-                        Log.e("결과", "연결 실패!")
-                    }
                 }
-            }
+            }while(!isCaptureSuccess)
+            isCaptureSuccess = false
+            Log.i("끝","끝")
         }.start()
     }
     private fun initSurfaceView() {
@@ -376,7 +425,7 @@ class CameraActivity : AppCompatActivity() {
         override fun onPostExecute(result: Void?) {
             super.onPostExecute(result)
 
-            Toast.makeText(applicationContext(), "사진을 저장하였습니다", Toast.LENGTH_SHORT).show()
+            Toast.makeText(applicationContext(), "사진 촬영 성공", Toast.LENGTH_SHORT).show()
         }
 
         override fun doInBackground(vararg p0: Bitmap?): Void? {
