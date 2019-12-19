@@ -264,10 +264,14 @@ class CameraActivity : AppCompatActivity() {
         Thread{
             do {
                 if(isCaptureSuccess) {
+                    mediaPlayer.reset()
+                    mediaPlayer = MediaPlayer.create(applicationContext, R.raw.wait_few)
+                    mediaPlayer.start()
+
                     with(url.openConnection() as HttpURLConnection) {
+                        setRequestProperty("charset", "utf-8")
+                        setRequestProperty("Content-Type", "application/json")
                         requestMethod = "POST"
-                        connectTimeout = 3000
-                        readTimeout = 3000
                         doInput = true
                         useCaches = false
 
@@ -281,9 +285,6 @@ class CameraActivity : AppCompatActivity() {
                         json.put("date",currentDate)
                         json.put("gender",gender)
 
-                        setRequestProperty("charset", "utf-8")
-                        setRequestProperty("Content-lenght", json.length().toString())
-                        setRequestProperty("Content-Type", "application/json")
 
                         wr.write(json.toString())
                         wr.flush()
@@ -323,7 +324,6 @@ class CameraActivity : AppCompatActivity() {
                 }
             }while(!isCaptureSuccess)
             isCaptureSuccess = false
-            Log.i("끝","끝")
         }.start()
     }
     private fun initSurfaceView() {
