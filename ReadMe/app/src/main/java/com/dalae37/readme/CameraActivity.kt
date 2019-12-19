@@ -264,6 +264,7 @@ class CameraActivity : AppCompatActivity() {
         Thread{
             do {
                 if(isCaptureSuccess) {
+                    isCaptureSuccess = false
                     mediaPlayer.reset()
                     mediaPlayer = MediaPlayer.create(applicationContext, R.raw.wait_few)
                     mediaPlayer.start()
@@ -323,7 +324,6 @@ class CameraActivity : AppCompatActivity() {
                     }
                 }
             }while(!isCaptureSuccess)
-            isCaptureSuccess = false
         }.start()
     }
     private fun initSurfaceView() {
